@@ -146,131 +146,150 @@ model1 = pd.DataFrame({
 
 model_data = model1  # 使用新的数据结构
 
-window_size = 1500
-test_size = 500
-
-
-# 分割训练集和测试集
-train_end = len(model_data) - test_size
-X_train = model_data[['rv_lag1', 'rv_lag5', 'rv_lag22','BTC_lag1']].iloc[:train_end]
-X_test = model_data[['rv_lag1', 'rv_lag5', 'rv_lag22','BTC_lag1']].iloc[train_end:]
-y_train = model_data['RV'].iloc[:train_end]
-y_test = model_data['RV'].iloc[train_end:]
-
-
-predictions_lr1 = []
-predictions_lr5 = []
-predictions_lr22 = []
-actuals_lr1 = []
-actuals_lr5 = []
-actuals_lr22 = []
-prediction_dates = []
-
-# 初始化滚动窗口
-rolling_X = X_train.copy()
-rolling_y = y_train.copy()
-
-# 滚动时间窗预测主循环
-for i in range(len(X_test)):
-    # 准备训练数据
-    if isinstance(rolling_X, np.ndarray):
-        X_train_loop = rolling_X
-        y_train_loop = rolling_y
-    else:
-        X_train_loop = rolling_X.values
-        y_train_loop = rolling_y.values
-
-    # 训练线性回归模型
-    model = LinearRegression()
-    model.fit(X_train_loop, y_train_loop)
-
-    # 1步预测
-    pred_1 = model.predict(X_test.iloc[i:i + 1])[0]
-    predictions_lr1.append(pred_1)
-    actuals_lr1.append(y_test.iloc[i])
-
-
-    # 5步预测
-    if i + 5 <= len(X_test):
-        pred_5 = pred_1
-        temp_X = X_test.iloc[i:i + 1].copy()
-        for j in range(4):  # Predict additional 4 steps to reach 5
-            temp_X['rv_lag1'] = pred_5
-            temp_X['rv_lag5'] = temp_X['rv_lag1'].shift(4).fillna(pred_1)
-            temp_X['rv_lag22'] = temp_X['rv_lag1'].shift(21).fillna(pred_1)
-            temp_X['BTC_lag1'] = temp_X['rv_lag1'].shift(1).fillna(pred_1)
-            pred_5 = model.predict(temp_X)[0]
-        predictions_lr5.append(pred_5)
-        actuals_lr5.append(y_test.iloc[i + 4])
-    else:
-        predictions_lr5.append(np.nan)
-        actuals_lr5.append(np.nan)
-
-    # 22步预测
-    if i + 22 <= len(X_test):
-        pred_22 = pred_1
-        temp_X = X_test.iloc[i:i + 1].copy()
-        for j in range(21):  # Predict additional 21 steps to reach 22
-            temp_X['rv_lag1'] = pred_22
-            temp_X['rv_lag5'] = temp_X['rv_lag1'].shift(4).fillna(pred_1)
-            temp_X['rv_lag22'] = temp_X['rv_lag1'].shift(21).fillna(pred_1)
-            temp_X['BTC_lag1'] = temp_X['rv_lag1'].shift(1).fillna(pred_1)
-            pred_22 = model.predict(temp_X)[0]
-        predictions_lr22.append(pred_22)
-        actuals_lr22.append(y_test.iloc[i + 21])
-    else:
-        predictions_lr22.append(np.nan)
-        actuals_lr22.append(np.nan)
-
-    # 更新滚动窗口
-    if isinstance(rolling_X, pd.DataFrame):
-        new_obs_X = X_test.iloc[i:i+1]
-        new_obs_y = y_test.iloc[i:i+1]
-        rolling_X = pd.concat([rolling_X.iloc[1:], new_obs_X], ignore_index=True)
-        rolling_y = pd.concat([rolling_y.iloc[1:], new_obs_y], ignore_index=True)
-    else:  # 如果是numpy数组
-        new_obs_X = X_test.iloc[i:i + 1].values
-        rolling_X = np.vstack((rolling_X[1:], new_obs_X))
-        rolling_y = np.append(rolling_y[1:], y_test.iloc[i])
-
-# 创建结果DataFrame
-df_predictions_lr = pd.DataFrame({
-    'Prediction_1': predictions_lr1,
-    'Actual_1': actuals_lr1,
-    'Prediction_5': predictions_lr5,
-    'Actual_5': actuals_lr5,
-    'Prediction_22': predictions_lr22,
-    'Actual_22': actuals_lr22
-})
+window_size = 1800
+test_size = 300
 
 
 
-df_predictions_lr.to_csv('log+har-rv.csv', index=False)
 import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-# 假设 df_predictions_lr 包含预测值和实际值
-predictions = df_predictions_lr['Prediction_1'].values
-actuals = df_predictions_lr['Actual_1'].values
+# 更好的解决方案：维护完整的历史序列
+def multi_step_predict_improved(model_data_slice, model, target_step):
+    """
+    改进的多步预测函数
+    """
+    # 创建历史序列的副本
+    history_rv = model_data_slice['RV'].tolist()
+    history_btc_lag1 = model_data_slice['BTC_lag1'].tolist()  # 初始化 BTC_lag1 历史序列
 
-# MSE
-mse = np.mean((predictions - actuals) ** 2)
+    for step in range(target_step):
+        current_len = len(history_rv)
 
-# MAE
-mae = np.mean(np.abs(predictions - actuals))
+        if current_len >= 1:
+            lag1_rv = history_rv[-1]
+            lag1_btc = history_btc_lag1[-1]  # 使用历史序列中的最后一个 BTC_lag1
+        else:
+            raise ValueError("历史数据不足")
 
-# HMSE
-hmse = np.mean((1 - predictions / actuals) ** 2)
+        if current_len >= 5:
+            lag5_rv = history_rv[-5]
+        else:
+            lag5_rv = history_rv[0]
 
-# HMAE
-hmae = np.mean(np.abs(1 - predictions / actuals))
+        if current_len >= 22:
+            lag22_rv = history_rv[-22]
+        else:
+            lag22_rv = history_rv[0]
 
-# RMSE
-rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
+        # 预测下一步
+        X_input = np.array([[lag1_rv, lag5_rv, lag22_rv, lag1_btc]])
+        pred = model.predict(X_input)[0]
+        # 更新历史序列
+        history_rv.append(pred)
+        history_btc_lag1.append(lag1_btc)
 
-# 打印结果
-print(f"1-Step Prediction Loss Metrics:")
-print(f"MSE: {mse:.6f}")
-print(f"MAE: {mae:.6f}")
-print(f"HMSE: {hmse:.6f}")
-print(f"HMAE: {hmae:.6f}")
-print(f"RMSE: {rmse:.6f}")
+    return history_rv[-1]
+# 修正后的主循环
+def rolling_forecast_corrected(model_data, test_size=300):
+    """
+    修正后的滚动预测主循环
+    """
+    predictions_lr1 = []
+    predictions_lr5 = []
+    predictions_lr20 = []
+    actuals_lr1 = []
+    actuals_lr5 = []
+    actuals_lr20 = []
+
+    # 分割数据
+    train_end = len(model_data) - test_size
+    train_data = model_data.iloc[:train_end].copy()
+    test_data = model_data.iloc[train_end:].copy()
+
+    # 滚动预测
+    for i in range(len(test_data)):
+        # 当前训练窗口
+        current_train_end = train_end + i
+        current_train_data = model_data.iloc[:current_train_end]
+
+        # 准备训练特征和目标，包含新变量BTC_lag1
+        X_train_current = current_train_data[['rv_lag1', 'rv_lag5', 'rv_lag22', 'BTC_lag1']].values
+        y_train_current = current_train_data['RV'].values
+
+        # 训练模型
+        model = LinearRegression()
+        model.fit(X_train_current, y_train_current)
+
+        # === 1步预测 ===
+        X_test_current = test_data.iloc[i][['rv_lag1', 'rv_lag5', 'rv_lag22', 'BTC_lag1']].values.reshape(1, -4)
+        pred_1 = model.predict(X_test_current)[0]
+        predictions_lr1.append(pred_1)
+        actuals_lr1.append(test_data.iloc[i]['RV'])
+
+        # === 5步预测 ===
+        if i + 4 < len(test_data):  # 确保有足够的实际值用于比较
+            # 获取用于5步预测的历史数据
+            history_data = model_data.iloc[:current_train_end]
+            pred_5 = multi_step_predict_improved(history_data, model, 5)
+            predictions_lr5.append(pred_5)
+            actuals_lr5.append(test_data.iloc[i + 4]['RV'])
+
+        # === 22步预测 ===
+        if i + 21 < len(test_data):  # 确保有足够的实际值用于比较
+            history_data = model_data.iloc[:current_train_end]
+            pred_20 = multi_step_predict_improved(history_data, model, 22)
+            predictions_lr20.append(pred_20)
+            actuals_lr20.append(test_data.iloc[i + 21]['RV'])
+
+    return {
+        'predictions_1': predictions_lr1,
+        'predictions_5': predictions_lr5,
+        'predictions_20': predictions_lr20,
+        'actuals_1': actuals_lr1,
+        'actuals_5': actuals_lr5,
+        'actuals_20': actuals_lr20
+    }
+
+# 使用示例
+if __name__ == "__main__":
+
+    results = rolling_forecast_corrected(model_data, test_size=300)
+
+    # 计算评估指标
+    def calculate_metrics(predictions, actuals):
+        # 移除NaN值
+        valid_idx = ~(np.isnan(predictions) | np.isnan(actuals))
+        pred_clean = np.array(predictions)[valid_idx]
+        actual_clean = np.array(actuals)[valid_idx]
+
+        if len(pred_clean) == 0:
+            return {'MSE': np.nan, 'RMSE': np.nan, 'MAE': np.nan}
+
+        mse = mean_squared_error(actual_clean, pred_clean)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(actual_clean, pred_clean)
+
+        return {'MSE': mse, 'RMSE': rmse, 'MAE': mae}
+
+    # 计算各步预测的评估指标
+    metrics_1 = calculate_metrics(results['predictions_1'], results['actuals_1'])
+    metrics_5 = calculate_metrics(results['predictions_5'], results['actuals_5'])
+    metrics_22 = calculate_metrics(results['predictions_20'], results['actuals_20'])
+
+    print("1步预测指标:", metrics_1)
+    print("5步预测指标:", metrics_5)
+    print("22步预测指标:", metrics_22)
+    max_len = len(results['predictions_1'])  # 以1步预测的长度为基准
+    df_predictions = pd.DataFrame({
+        'Prediction_1': results['predictions_1'],
+        'Actual_1': results['actuals_1'],
+        'Prediction_5': results['predictions_5'] + [np.nan] * (max_len - len(results['predictions_5'])),
+        'Actual_5': results['actuals_5'] + [np.nan] * (max_len - len(results['actuals_5'])),
+        'Prediction_20': results['predictions_20'] + [np.nan] * (max_len - len(results['predictions_20'])),
+        'Actual_20': results['actuals_20'] + [np.nan] * (max_len - len(results['actuals_20']))
+    })
+    df_predictions.to_csv('log+har-rv.csv', index=False)
+    print("预测结果已保存至 'forecast_results.csv'")
